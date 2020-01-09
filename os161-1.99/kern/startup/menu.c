@@ -259,6 +259,15 @@ cmd_sync(int nargs, char **args)
 	return 0;
 }
 
+static int cmd_dth(int nargs, char **args) {
+	(void)nargs;
+	(void)args;
+
+	dbflags = 0x0010;
+
+	return 0;
+}
+
 /*
  * Command for doing an intentional panic.
  */
@@ -435,6 +444,7 @@ static const char *opsmenu[] = {
 	"[cd]      Change directory          ",
 	"[pwd]     Print current directory   ",
 	"[sync]    Sync filesystems          ",
+	"[dth]     Enable DB_THREADS debugging",
 	"[panic]   Intentional panic         ",
 	"[q]       Quit and shut down        ",
 	NULL
@@ -545,6 +555,7 @@ static struct {
 	{ "cd",		cmd_chdir },
 	{ "pwd",	cmd_pwd },
 	{ "sync",	cmd_sync },
+	{"dth",     cmd_dth },
 	{ "panic",	cmd_panic },
 	{ "q",		cmd_quit },
 	{ "exit",	cmd_quit },
