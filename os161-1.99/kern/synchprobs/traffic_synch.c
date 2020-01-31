@@ -2,7 +2,9 @@
 #include <lib.h>
 #include <synchprobs.h>
 #include <synch.h>
+#include <wchan.h>
 #include <opt-A1.h>
+#include <array.h>
 
 /* 
  * This simple default synchronization mechanism allows only vehicle at a time
@@ -21,7 +23,24 @@
 /*
  * replace this with declarations of any synchronization and other variables you need here
  */
-static struct semaphore *intersectionSem;
+
+// static struct semaphore *intersectionSem;
+static struct cv *cvSouth;
+static struct cv *cvNorth;
+static struct cv *cvEast;
+static struct cv *cvWest;
+static struct lock *lock;
+
+struct Car {
+  Direction origin;
+  Direction destination;
+} Car;
+
+static volatile int entered = 0;
+static volatile int exited = 0;
+static volatile Direction direction;
+
+static volatile int cars_waiting[] = {0,0,0,0}; 
 
 
 /* 
@@ -31,15 +50,34 @@ static struct semaphore *intersectionSem;
  * You can use it to initialize synchronization and other variables.
  * 
  */
+
 void
 intersection_sync_init(void)
 {
   /* replace this default implementation with your own implementation */
+  cvSouth = cv_create("cv south");
+  cvNorth = cv_create("cv north");
+  cvEast = cv_create("cv east");
+  cvWest = cv_create("cv");
+  lock = lock_create("intersectionLock");
 
-  intersectionSem = sem_create("intersectionSem",1);
-  if (intersectionSem == NULL) {
-    panic("could not create intersection semaphore");
+  if (cvSouth == NULL) {
+    panic("could not create CV");
   }
+  if (cvNorth == NULL) {
+    panic("could not create CV");
+  }
+  if (cvEast == NULL) {
+    panic("could not create CV");
+  }
+  if (cvWest == NULL) {
+    panic("could not create CV");
+  }
+
+  if (lock == NULL) {
+    panic("Could not create lock :(");
+  }
+
   return;
 }
 
@@ -54,8 +92,18 @@ void
 intersection_sync_cleanup(void)
 {
   /* replace this default implementation with your own implementation */
-  KASSERT(intersectionSem != NULL);
-  sem_destroy(intersectionSem);
+
+  KASSERT(cvNorth != NULL);
+  cv_destroy(cvNorth);
+  KASSERT(cvSouth != NULL);
+  cv_destroy(cvSouth);
+  KASSERT(cvEast != NULL);
+  cv_destroy(cvEast);
+  KASSERT(cvWest != NULL);
+  cv_destroy(cvWest);
+
+  KASSERT(lock != NULL);
+  lock_destroy(lock);
 }
 
 
@@ -75,12 +123,31 @@ intersection_sync_cleanup(void)
 void
 intersection_before_entry(Direction origin, Direction destination) 
 {
-  // check every car currently in the intersection
-  /* replace this default implementation with your own implementation */
-  (void)origin;  /* avoid compiler complaint about unused parameter */
-  (void)destination; /* avoid compiler complaint about unused parameter */
-  KASSERT(intersectionSem != NULL);
-  P(intersectionSem);
+  lock_acquire(lock);
+  cars_waiting[origin] ++;
+
+  if (entered == exited) {
+    direction = origin; // car can go right away
+  } else if (origin == direction) { // car can go right away if it was waiting
+  } else {
+    if (origin == north) {
+      cv_wait(cvNorth, lock);
+    }
+    else if (origin == south) {
+      cv_wait(cvSouth, lock);
+    }
+    else if (origin == east) {
+      cv_wait(cvEast, lock);
+    }
+    else if (origin == west) {
+      cv_wait(cvWest, lock);
+    }
+  }
+
+  (void)destination;
+  
+  entered ++;
+  lock_release(lock);
 }
 
 
@@ -98,9 +165,48 @@ intersection_before_entry(Direction origin, Direction destination)
 void
 intersection_after_exit(Direction origin, Direction destination) 
 {
-  /* replace this default implementation with your own implementation */
-  (void)origin;  /* avoid compiler complaint about unused parameter */
-  (void)destination; /* avoid compiler complaint about unused parameter */
-  KASSERT(intersectionSem != NULL);
-  V(intersectionSem);
+  lock_acquire(lock);
+
+  exited ++;
+
+  if (cars_waiting[origin] > 0) cars_waiting[origin] --;
+
+  if (entered == exited) {
+    entered = 0;
+    exited = 0;
+
+    struct cv *next = cvEast;
+    if (direction == south) next = cvSouth;
+    if (direction == north) next = cvNorth;
+    if (direction == west) next = cvWest;
+
+    // if (direction == north) {
+    //   if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
+    //   else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
+    //   else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
+    // } else if (direction == east) {
+    //   if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
+    //   else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
+    //   else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
+    // } else if (direction == south) {
+    //   if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
+    //   else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
+    //   else if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
+    // } else if (direction == west) {
+    //   if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
+    //   else if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
+    //   else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
+    // }
+
+    if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
+    else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
+    else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
+    else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
+
+    cv_signal(next, lock);
+  }
+
+  (void)origin;
+  (void)destination;
+  lock_release(lock);
 }
