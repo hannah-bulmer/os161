@@ -37,7 +37,6 @@ struct Car {
 } Car;
 
 static volatile int entered = 0;
-static volatile int exited = 0;
 static volatile Direction direction;
 
 static volatile int cars_waiting[] = {0,0,0,0}; 
@@ -124,12 +123,14 @@ void
 intersection_before_entry(Direction origin, Direction destination) 
 {
   lock_acquire(lock);
-  cars_waiting[origin] ++;
 
-  if (entered == exited) {
+  if (entered == 0 && cars_waiting[north] == 0 && cars_waiting[south] == 0 && cars_waiting[east] == 0 && cars_waiting[west] == 0) {
+    cars_waiting[origin] ++;
     direction = origin; // car can go right away
   } else if (origin == direction) { // car can go right away if it was waiting
+  cars_waiting[origin] ++;
   } else {
+    cars_waiting[origin] ++;
     if (origin == north) {
       cv_wait(cvNorth, lock);
     }
@@ -143,10 +144,11 @@ intersection_before_entry(Direction origin, Direction destination)
       cv_wait(cvWest, lock);
     }
   }
+  entered ++;
 
   (void)destination;
   
-  entered ++;
+  cars_waiting[origin] --;
   lock_release(lock);
 }
 
@@ -167,43 +169,42 @@ intersection_after_exit(Direction origin, Direction destination)
 {
   lock_acquire(lock);
 
-  exited ++;
+  entered --;
 
-  if (cars_waiting[origin] > 0) cars_waiting[origin] --;
+  // cars_waiting[origin] --;
 
-  if (entered == exited) {
-    entered = 0;
-    exited = 0;
+  if (entered == 0) {
 
     struct cv *next = cvEast;
     if (direction == south) next = cvSouth;
     if (direction == north) next = cvNorth;
     if (direction == west) next = cvWest;
 
-    // if (direction == north) {
-    //   if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
-    //   else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
-    //   else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
-    // } else if (direction == east) {
-    //   if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
-    //   else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
-    //   else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
-    // } else if (direction == south) {
-    //   if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
-    //   else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
-    //   else if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
-    // } else if (direction == west) {
-    //   if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
-    //   else if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
-    //   else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
-    // }
+    // when no cars are in the intersection, do a swappy swap to send new cars off
+    if (direction == north) {
+      if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
+      else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
+      else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
+    } else if (direction == east) {
+      if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
+      else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
+      else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
+    } else if (direction == south) {
+      if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
+      else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
+      else if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
+    } else if (direction == west) {
+      if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
+      else if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
+      else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
+    }
 
-    if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
-    else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
-    else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
-    else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
+    // if (cars_waiting[east] > 0) {next = cvEast; direction = east;}
+    // else if (cars_waiting[south] > 0) {next = cvSouth; direction = south;}
+    // else if (cars_waiting[west] > 0) {next = cvWest; direction = west;}
+    // else if (cars_waiting[north] > 0) {next = cvNorth; direction = north;}
 
-    cv_signal(next, lock);
+    cv_broadcast(next, lock);
   }
 
   (void)origin;
