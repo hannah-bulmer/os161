@@ -51,6 +51,8 @@
 #include <synch.h>
 #include <kern/fcntl.h>  
 
+#include "opt-A2.h"
+
 /*
  * The process for the kernel; this holds all the kernel-only threads.
  */
@@ -208,6 +210,10 @@ proc_bootstrap(void)
     panic("could not create no_proc_sem semaphore\n");
   }
 #endif // UW 
+
+#ifdef OPT_A2
+	pid_count = 0;
+#endif
 }
 
 /*
@@ -362,5 +368,18 @@ curproc_setas(struct addrspace *newas)
 	oldas = proc->p_addrspace;
 	proc->p_addrspace = newas;
 	spinlock_release(&proc->p_lock);
+	return oldas;
+}
+
+/*
+ Change address of child space (?)
+*/
+struct addrspace *childproc_setas(struct addrspace *newas, struct proc *childProc) {
+	struct addrspace *oldas;
+
+	spinlock_acquire(&childProc->p_lock);
+	oldas = childProc->p_addrspace;
+	childProc->p_addrspace = newas;
+	spinlock_release(&childProc->p_lock);
 	return oldas;
 }
