@@ -8,6 +8,8 @@
 #include <proc.h>
 #include <thread.h>
 #include <addrspace.h>
+#include <array.h>
+#include <synch.h>
 #include <copyinout.h>
 #include <mips/trapframe.h>
 #include "opt-A2.h"
@@ -47,8 +49,11 @@ pid_t sys_fork(struct trapframe *tf, pid_t *retval) {
   childProc->pid = pid_count;
   spinlock_release(&childProc->p_lock);
 
-  // create new thread
+  // add assignments to parent and child
+  array_add(curproc->children, childProc, NULL);
+  childProc->parent = curproc;
 
+  // create new thread
   struct trapframe *tf_c = kmalloc(sizeof(struct trapframe));
   *tf_c = *tf;
   err = thread_fork("Child thread", childProc, (void *)enter_forked_process, (void *)tf_c, childProc->pid);
@@ -68,21 +73,18 @@ void sys__exit(int exitcode) {
 
   struct addrspace *as;
   struct proc *p = curproc;
-  /* for now, just include this to keep the compiler from complaining about
-     an unused variable */
-  (void)exitcode;
+  
+  spinlock_acquire(&curproc->p_lock);
+  p->exit_val = exitcode;
+  array_set(exit_codes, (int)p->pid, (void *)p->exit_val);
+  spinlock_release(&curproc->p_lock);
 
   DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
 
   KASSERT(curproc->p_addrspace != NULL);
+
+  // destroy space
   as_deactivate();
-  /*
-   * clear p_addrspace before calling as_destroy. Otherwise if
-   * as_destroy sleeps (which is quite possible) when we
-   * come back we'll be calling as_activate on a
-   * half-destroyed address space. This tends to be
-   * messily fatal.
-   */
   as = curproc_setas(NULL);
   as_destroy(as);
 
@@ -90,8 +92,7 @@ void sys__exit(int exitcode) {
   /* note: curproc cannot be used after this call */
   proc_remthread(curthread);
 
-  /* if this is the last user process in the system, proc_destroy()
-     will wake up the kernel menu thread */
+  V(p->sem);  
   proc_destroy(p);
   
   thread_exit();
@@ -114,27 +115,54 @@ int sys_waitpid(pid_t pid,
 {
   int exitstatus;
   int result;
-
-  /* this is just a stub implementation that always reports an
-     exit status of 0, regardless of the actual exit status of
-     the specified process.   
-     In fact, this will return 0 even if the specified process
-     is still running, and even if it never existed in the first place.
-
-     Fix this!
-  */
+  struct proc *p = curproc;
 
   if (options != 0) {
     return(EINVAL);
   }
-  /* for now, just pretend the exitstatus is 0 */
-  exitstatus = 0;
+
+  exitstatus = (int)array_get(exit_codes, (int)pid);
+
+  if (exitstatus != EMPTY_EXIT_CODE) {
+    exitstatus = _MKWAIT_EXIT(exitstatus);
+    result = copyout((void *)&exitstatus,status,sizeof(int));
+    if (result) return result;
+    *retval = pid;
+    return 0;
+  }
+
+  // else block the child
+  struct proc *child;
+
+  // find child
+  int size = array_num(p->children);
+  for (int i = 0; i < size; i ++) {
+    struct proc *temp = (struct proc *)array_get(p->children, i);
+    if ((int)pid == (int)temp->pid) {
+      child = temp;
+      break;
+    }
+  }
+
+  if (child == NULL) {
+    return EINVAL;
+  }
+
+  // block child
+  P(child->sem);
+
+  exitstatus = (int)array_get(exit_codes, (int)pid);
+
+  KASSERT(exitstatus != EMPTY_EXIT_CODE);
+
+  exitstatus = _MKWAIT_EXIT(exitstatus);
   result = copyout((void *)&exitstatus,status,sizeof(int));
+  // V(child->sem);
   if (result) {
     return(result);
   }
   *retval = pid;
-  return(0);
+  return 0;
 }
 
 #else // BEFORE A2

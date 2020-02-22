@@ -30,6 +30,8 @@
 #ifndef _PROC_H_
 #define _PROC_H_
 
+#define EMPTY_EXIT_CODE -100000
+
 /*
  * Definition of a process.
  *
@@ -37,6 +39,7 @@
  */
 #include "opt-A2.h" 
 #include <spinlock.h>
+#include <array.h>
 #include <thread.h> /* required for struct threadarray */
 
 struct addrspace;
@@ -72,6 +75,11 @@ struct proc {
 	#ifdef OPT_A2
 
 	pid_t pid;
+	struct proc *parent;
+	// struct proc *children[65];
+	struct array *children;
+	struct semaphore *sem;
+	int exit_val;
 
 	#endif
 };
@@ -86,6 +94,7 @@ extern struct semaphore *no_proc_sem;
 
 #ifdef OPT_A2
 static volatile unsigned int pid_count;
+struct array *exit_codes;
 #endif
 
 /* Call once during system startup to allocate data structures. */

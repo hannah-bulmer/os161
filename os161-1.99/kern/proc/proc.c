@@ -95,6 +95,12 @@ proc_create(const char *name)
 	threadarray_init(&proc->p_threads);
 	spinlock_init(&proc->p_lock);
 
+	#ifdef OPT_A2
+	proc->children = array_create();
+	proc->exit_val = 0;
+	proc->sem = sem_create("Process sem", 0);
+	#endif
+
 	/* VM fields */
 	proc->p_addrspace = NULL;
 
@@ -213,6 +219,10 @@ proc_bootstrap(void)
 
 #ifdef OPT_A2
 	pid_count = 0;
+	exit_codes = array_create();
+	for (int i = 0; i <= 65; i ++) {
+		array_add(exit_codes, (void *) EMPTY_EXIT_CODE, NULL);
+	}
 #endif
 }
 
