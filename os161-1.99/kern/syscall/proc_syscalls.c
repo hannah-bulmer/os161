@@ -14,6 +14,7 @@
 #include <copyinout.h>
 #include <vfs.h>
 #include <mips/trapframe.h>
+#include <limits.h>
 #include "opt-A2.h"
 
 #ifdef OPT_A2
@@ -168,34 +169,38 @@ int sys_waitpid(pid_t pid,
 }
 
 int sys_execv(userptr_t prog, userptr_t argv) {
-  char *program = (char *)prog;
-  char **args = (char **)argv;
-
-  kprintf("%s\n", program);
-
-  // count # arguments and copy them to the kernel
-
-  int argc = 0;
-  while (args[argc] != NULL) {
-    argc ++;
-  }
-
-
-  // copy program path into the kernel
   struct addrspace *as;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
 	int result;
 
+  size_t progNameSize = (strlen((char *)prog) + 1) * sizeof(char);
+
+  char *progname =  (char *)kmalloc(progNameSize);
+  size_t *accSize;
+  result = copyinstr(prog, (void*)progname, progNameSize, accSize);
+  if (result) {
+    kfree(progname);
+    return result;
+  }
+
+  kprintf("%s\n", progname);
+
+  (void)argv;
+
+  // count # arguments and copy them to the kernel
+
+  // copy program path into the kernel
+
 
 	/* Open the file. */
-	result = vfs_open(program, O_RDWR, 0, &v);
+	result = vfs_open(progname, O_RDONLY, 0, &v);
 	if (result) {
 		return result;
 	}
 
 	/* We should be a new process. */
-	// KASSERT(curproc_getas() == NULL);
+	KASSERT(v != NULL);
 
 	/* Create a new address space. */
 	as = as_create();
@@ -204,11 +209,13 @@ int sys_execv(userptr_t prog, userptr_t argv) {
 		return ENOMEM;
 	}
 
+
 	/* Switch to it and activate it. */
 	curproc_setas(as);
 	as_activate();
 
 	/* Load the executable. */
+  
 	result = load_elf(v, &entrypoint);
 	if (result) {
 		/* p_addrspace will go away when curproc is destroyed */
@@ -229,7 +236,7 @@ int sys_execv(userptr_t prog, userptr_t argv) {
 
 
 	// fix first two parameters here
-	enter_new_process(argc, NULL, stackptr, entrypoint);
+	enter_new_process(0, NULL, stackptr, entrypoint);
 	
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
