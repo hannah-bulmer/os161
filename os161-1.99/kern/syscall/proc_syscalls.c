@@ -2,6 +2,7 @@
 #include <kern/errno.h>
 #include <kern/unistd.h>
 #include <kern/wait.h>
+#include <kern/fcntl.h>
 #include <lib.h>
 #include <syscall.h>
 #include <current.h>
@@ -11,6 +12,7 @@
 #include <array.h>
 #include <synch.h>
 #include <copyinout.h>
+#include <vfs.h>
 #include <mips/trapframe.h>
 #include "opt-A2.h"
 
@@ -164,6 +166,76 @@ int sys_waitpid(pid_t pid,
   *retval = pid;
   return 0;
 }
+
+int sys_execv(userptr_t prog, userptr_t argv) {
+  char *program = (char *)prog;
+  char **args = (char **)argv;
+
+  kprintf("%s\n", program);
+
+  // count # arguments and copy them to the kernel
+
+  int argc = 0;
+  while (args[argc] != NULL) {
+    argc ++;
+  }
+
+
+  // copy program path into the kernel
+  struct addrspace *as;
+	struct vnode *v;
+	vaddr_t entrypoint, stackptr;
+	int result;
+
+
+	/* Open the file. */
+	result = vfs_open(program, O_RDWR, 0, &v);
+	if (result) {
+		return result;
+	}
+
+	/* We should be a new process. */
+	// KASSERT(curproc_getas() == NULL);
+
+	/* Create a new address space. */
+	as = as_create();
+	if (as ==NULL) {
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+	/* Switch to it and activate it. */
+	curproc_setas(as);
+	as_activate();
+
+	/* Load the executable. */
+	result = load_elf(v, &entrypoint);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		vfs_close(v);
+		return result;
+	}
+
+	/* Done with the file now. */
+	vfs_close(v);
+
+  // copy arguments from the user space into the new address space
+  result = as_define_stack(as, &stackptr);
+    if (result) {
+      /* p_addrspace will go away when curproc is destroyed */
+      return result;
+    }
+  // delete old address space
+
+
+	// fix first two parameters here
+	enter_new_process(argc, NULL, stackptr, entrypoint);
+	
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
+	return EINVAL;
+}
+
 
 #else // BEFORE A2
 
