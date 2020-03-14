@@ -419,10 +419,6 @@ enter_new_process(int argc, userptr_t argv, vaddr_t stack, vaddr_t entry)
 {
 	struct trapframe tf;
 
-	kprintf("From enter_new_process:\n");
-	kprintf("Argv: %x\n", (int)argv);
-	kprintf("Stack: %x\n", (int)stack);
-
 	bzero(&tf, sizeof(tf));
 
 	tf.tf_status = CST_IRQMASK | CST_IEp | CST_KUp;

@@ -182,7 +182,7 @@ int sys_execv(userptr_t prog, userptr_t argv) {
     return result;
   }
 
-  kprintf("%s\n", progname);
+  // kprintf("%s\n", progname);
 
   char ** argsArray = (char **)argv;
   int argc = 0;
@@ -194,29 +194,13 @@ int sys_execv(userptr_t prog, userptr_t argv) {
     size_t argSize = (strlen(argsArray[i]) + 1) * sizeof(char);
     arguments[i] = kmalloc(argSize);
     result = copyin((userptr_t)argsArray[i], (void *)arguments[i], argSize);
+    if (result) {
+      for (int j = 0; i <= i; j ++) kfree(arguments[j]);
+      kfree(arguments);
+    }
   }
 
-  // int argc = 0;
-  // while(true) {
-  //   char* arg = NULL;
-  //   // arguments[argc] = kmalloc(sizeof(char*));
-  //   copyin(argv+argc*sizeof(char*), &arg, sizeof(char*));
-	// 	arguments[argc] = arg;
-	// 	if(arg != NULL) argc++;
-  //   else break;
-	// }
-
-  int sumOfArglengths = 0;
-  int arg_lengths[argc];
-
-  for (int i = 0; i < argc; i ++) {
-    sumOfArglengths += strlen(arguments[i]);
-    arg_lengths[i] = strlen(arguments[i]) + 1;
-  }
-
-  for (int i = 0; i < argc; i ++) {
-    kprintf("%s\n", arguments[i]);
-  }
+  // for (int i = 0; i < argc; i ++) kprintf("%s\n", arguments[i]);
 
 	/* Open the file. */
 	result = vfs_open(progname, O_RDONLY, 0, &v);
@@ -234,61 +218,57 @@ int sys_execv(userptr_t prog, userptr_t argv) {
 
 
   // Switch to it and activate it.
-	curproc_setas(as);
+  struct addrspace *old_as = curproc_setas(as);
 	as_activate();
 
   // load executable
 	result = load_elf(v, &entrypoint);
 	if (result) {
-		/* p_addrspace will go away when curproc is destroyed */
 		vfs_close(v);
 		return result;
 	}
 
-	/* Done with the file now. */
+	// close file
 	vfs_close(v);
-
-  // copy arguments from kernel into user space
-
-  // for (int i = 0; i < argc; i ++) {
-  //   copyout(arguments, (userptr_t)argsptr, sizeof(char **));
-  // }
-
 
   // copy arguments from the user space into the new address space
   result = as_define_stack(as, &stackptr);
-    if (result) {
-      /* p_addrspace will go away when curproc is destroyed */
-      return result;
-    }
+  if (result) return result;
+
   // delete old address space
+  as_destroy(old_as);
 
-  int stacksize = (argc + 1)* 8 + ROUNDUP(sumOfArglengths + argc, 8);
-  stackptr -= stacksize;
-  kprintf("Stack ptr: %x\n", stackptr);
-  int arg_loc = stackptr + (argc + 1)*8;
+  // push strings onto the stack
+  userptr_t arg_locs[argc];
 
-  for (int i = 0; i <= argc; i ++) {
-    if (i == argc) arg_loc = (int)NULL;
-    result = copyout((void *)arg_loc, (userptr_t)(stackptr + i*8), sizeof(char **));
-    kprintf("Address %x: %x\n", stackptr + i*8, arg_loc);
-    if (i < argc) arg_loc += arg_lengths[i];
-  }
-
-  arg_loc = stackptr + (argc + 1) * 8;
-
-  for (int i = 0; i < argc; i ++) {
+  for (int i = argc-1; i >= 0; i --) {
+    size_t length = (strlen(arguments[i]) + 1)* sizeof(char);
+    stackptr -= ROUNDUP(length, 8);
     size_t size = 0;
-    copyoutstr(arguments[i], (userptr_t)arg_loc, arg_lengths[i], &size);
-    kprintf("Address %x: %s\n", arg_loc, arguments[i]);
-    arg_loc += arg_lengths[i];
+    result = copyoutstr(arguments[i], (userptr_t)stackptr, length, &size);
+    if (result) return result;
+    arg_locs[i] = (userptr_t)stackptr;
+    // kprintf("Address %p: %s\n", (void *)stackptr, arguments[i]);
   }
 
-	// fix first two parameters here
+  arg_locs[argc] = 0;
+
+  // push pointers onto the stack
+  for (int i = argc; i >= 0; i --) {
+    stackptr -= sizeof(char **);
+    copyout((void *)&arg_locs[i], (userptr_t)stackptr, sizeof(char **));
+    // kprintf("Address %p: %p\n", (void *)stackptr, (void *)arg_locs);
+  }
+
 	enter_new_process(argc, (userptr_t)stackptr, stackptr, entrypoint);
 	
-	/* enter_new_process does not return. */
+	// enter_new_process does not return.
 	panic("enter_new_process returned\n");
+  kfree(progname);
+  for (int i = 0; i < argc; i ++) {
+    kfree(arguments[i]);
+  }
+  kfree(arguments);
 	return EINVAL;
 }
 
