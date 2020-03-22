@@ -20,14 +20,6 @@
 #ifdef OPT_A2
 
 pid_t sys_fork(struct trapframe *tf, pid_t *retval) {
-  // set the initial pid
-  if (curproc->pid < 0) {
-    spinlock_acquire(&curproc->p_lock);
-    pid_count += 1;
-    curproc->pid = pid_count;
-    spinlock_release(&curproc->p_lock);
-  }
-
   // create empty child process
   struct proc *childProc = proc_create_runprogram("Child");
   KASSERT(childProc != NULL);

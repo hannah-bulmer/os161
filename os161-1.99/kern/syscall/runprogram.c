@@ -61,13 +61,6 @@ runprogram(char *progname, char ** arguments)
 	vaddr_t entrypoint, stackptr;
 	int result;
 
-	if (curproc->pid < 0) {
-		spinlock_acquire(&curproc->p_lock);
-		pid_count += 1;
-		curproc->pid = pid_count;
-		spinlock_release(&curproc->p_lock);
-  	}
-
 	int argc = 0;
 	while (arguments[argc] != NULL) argc ++;
 
@@ -120,7 +113,7 @@ runprogram(char *progname, char ** arguments)
 		result = copyoutstr(arguments[i], (userptr_t)stackptr, length, &size);
 		// if (result) return result;
 		arg_locs[i] = (userptr_t)stackptr;
-    	kprintf("Address %p: %s\n", (void *)stackptr, arguments[i]);
+    	// kprintf("Address %p: %s\n", (void *)stackptr, arguments[i]);
     }
 
 	arg_locs[argc] = 0;

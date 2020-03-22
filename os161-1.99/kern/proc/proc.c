@@ -96,6 +96,11 @@ proc_create(const char *name)
 	spinlock_init(&proc->p_lock);
 
 	#ifdef OPT_A2
+	if (proc->pid < 0) proc->pid = pid_count;
+	spinlock_acquire(&proc->p_lock);
+    pid_count += 1;
+    proc->pid = pid_count;
+    spinlock_release(&proc->p_lock);
 	proc->children = array_create();
 	proc->exit_val = 0;
 	proc->sem = sem_create("Process sem", 0);
