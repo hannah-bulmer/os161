@@ -175,8 +175,8 @@ int sys_execv(userptr_t prog, userptr_t argv) {
 	int result;
 
   char *progname =  kmalloc(PATH_MAX);
-  size_t *accSize;
-  result = copyinstr(prog, (void*)progname, PATH_MAX, accSize);
+  size_t accSize;
+  result = copyinstr(prog, (void*)progname, PATH_MAX, &accSize);
   if (result) {
     kfree(progname);
     return result;

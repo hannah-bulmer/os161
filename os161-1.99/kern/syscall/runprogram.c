@@ -41,6 +41,8 @@
 #include <current.h>
 #include <addrspace.h>
 #include <vm.h>
+#include <limits.h>
+#include <copyinout.h>
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
@@ -52,12 +54,22 @@
  * Calls vfs_open on progname and thus may destroy it.
  */
 int
-runprogram(char *progname)
+runprogram(char *progname, char ** arguments)
 {
 	struct addrspace *as;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
 	int result;
+
+	if (curproc->pid < 0) {
+		spinlock_acquire(&curproc->p_lock);
+		pid_count += 1;
+		curproc->pid = pid_count;
+		spinlock_release(&curproc->p_lock);
+  	}
+
+	int argc = 0;
+	while (arguments[argc] != NULL) argc ++;
 
 	/* Open the file. */
 	result = vfs_open(progname, O_RDONLY, 0, &v);
@@ -76,7 +88,7 @@ runprogram(char *progname)
 	}
 
 	/* Switch to it and activate it. */
-	curproc_setas(as);
+	struct addrspace *old_as = curproc_setas(as);
 	as_activate();
 
 	/* Load the executable. */
@@ -90,6 +102,8 @@ runprogram(char *progname)
 	/* Done with the file now. */
 	vfs_close(v);
 
+	as_destroy(old_as);
+
 	/* Define the user stack in the address space */
 	result = as_define_stack(as, &stackptr);
 	if (result) {
@@ -97,8 +111,28 @@ runprogram(char *progname)
 		return result;
 	}
 
+	userptr_t arg_locs[argc];
+
+	for (int i = argc-1; i >= 0; i --) {
+		size_t length = (strlen(arguments[i]) + 1)* sizeof(char);
+		stackptr -= ROUNDUP(length, 8);
+		size_t size = 0;
+		result = copyoutstr(arguments[i], (userptr_t)stackptr, length, &size);
+		// if (result) return result;
+		arg_locs[i] = (userptr_t)stackptr;
+    	kprintf("Address %p: %s\n", (void *)stackptr, arguments[i]);
+    }
+
+	arg_locs[argc] = 0;
+
+	// push pointers onto the stack
+	for (int i = argc; i >= 0; i --) {
+		stackptr -= sizeof(char **);
+		copyout((void *)&arg_locs[i], (userptr_t)stackptr, sizeof(char **));
+	}
+
 	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+	enter_new_process(argc /*argc*/, (userptr_t)stackptr /*userspace addr of argv*/,
 			  stackptr, entrypoint);
 	
 	/* enter_new_process does not return. */
