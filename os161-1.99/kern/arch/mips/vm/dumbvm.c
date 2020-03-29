@@ -51,23 +51,80 @@
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 
+bool CORE_MAP_CREATED = false;
+int CORE_MAP_SIZE = 0;
+int *CORE_MAP;
+
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+	// TO DO: make sure pages are all PAGE ALIGNED - i.e. divisible by 4096 ?
+	paddr_t lo; paddr_t hi;
+	CORE_MAP_CREATED = true;
+	ram_getsize(&lo, &hi);
+
+	// check this
+	int space = (hi-lo);
+	int num_pages = space / (PAGE_SIZE + 4); // max number of pages is probably 128
+	CORE_MAP_SIZE = num_pages;
+	paddr_t map_start = ROUNDUP(num_pages * sizeof(int) + lo, PAGE_SIZE);
+	CORE_MAP = (int*) PADDR_TO_KVADDR(map_start);
+
+	// set all values to 0
+	for (int i = 0; i < num_pages; i ++) {
+		*(int *)(CORE_MAP+i*sizeof(int))= 0;
+	}
 }
 
 static
 paddr_t
 getppages(unsigned long npages)
 {
-	paddr_t addr;
+	// kprintf("Looking for space for %d pages!\n", (int)npages);
+	paddr_t addr = -1;
 
-	spinlock_acquire(&stealmem_lock);
+	if (!CORE_MAP_CREATED) {
+		spinlock_acquire(&stealmem_lock);
 
-	addr = ram_stealmem(npages);
-	
-	spinlock_release(&stealmem_lock);
+		addr = ram_stealmem(npages);
+		
+		spinlock_release(&stealmem_lock);
+	} else {
+		spinlock_acquire(&stealmem_lock);
+		for (int i = 0; i < CORE_MAP_SIZE-(int)npages; i ++) {
+			int num_page = 0;
+			// find n free pages in a row
+			while (num_page < (int)npages) {
+				// spinlock_acquire(&stealmem_lock);
+				if (*(int*)(CORE_MAP+i*sizeof(int) + num_page*sizeof(int)) == 0) {
+					num_page ++;
+				} else {
+					break;
+				}
+				
+			}
+
+			if (num_page == (int)npages) {
+				// then allocate all those pages
+				int counter = 1;
+				// give pa the actual address of the page
+				addr = (paddr_t)ROUNDUP(((int)CORE_MAP+CORE_MAP_SIZE*sizeof(int) + i*PAGE_SIZE - MIPS_KSEG0), PAGE_SIZE);
+				// kprintf("PA: %x\n", addr);
+				while (counter <= (int)npages) {
+					int * mem = CORE_MAP+i*sizeof(int) + (counter-1)*sizeof(int);
+					*mem = counter;
+					counter ++;
+				}
+				break;
+			}
+		}
+		spinlock_release(&stealmem_lock);
+	}
+
+	if ((int)addr < 0) {
+		panic("Ran out of address space! Please free things!!\n");
+	}
+
 	return addr;
 }
 
@@ -86,9 +143,13 @@ alloc_kpages(int npages)
 void 
 free_kpages(vaddr_t addr)
 {
-	/* nothing - leak the memory. */
+	// find the page start by converting to paddr
+	int pageNum = ((int)(addr + MIPS_KSEG0) - (int)CORE_MAP)/ PAGE_SIZE;
+	(void)pageNum;
+	// kprintf("Page to delete: %d\n", pageNum);
+	// make everything 0 until it reaches the next 0 or the next 1
+	// (void)addr;
 
-	(void)addr;
 }
 
 void
@@ -113,6 +174,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	uint32_t ehi, elo;
 	struct addrspace *as;
 	int spl;
+	bool READONLY = false;
 
 	faultaddress &= PAGE_FRAME;
 
@@ -120,8 +182,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	switch (faulttype) {
 	    case VM_FAULT_READONLY:
-		/* We always create pages read-write, so we can't get this */
-		panic("dumbvm: got VM_FAULT_READONLY\n");
+			return EPERM; // tried to read to write-only
 	    case VM_FAULT_READ:
 	    case VM_FAULT_WRITE:
 		break;
@@ -168,6 +229,12 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	stackbase = USERSTACK - DUMBVM_STACKPAGES * PAGE_SIZE;
 	stacktop = USERSTACK;
 
+
+	// check to make sure this actually points to the code area!
+	if (faultaddress >= vbase1 && faultaddress < vtop1) {
+		if (as->LOADED) READONLY = true;
+	}
+
 	if (faultaddress >= vbase1 && faultaddress < vtop1) {
 		paddr = (faultaddress - vbase1) + as->as_pbase1;
 	}
@@ -194,15 +261,19 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		}
 		ehi = faultaddress;
 		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
-		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
+		if (READONLY) elo &= ~TLBLO_DIRTY;
+		DEBUG(DB_THREADS, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 		tlb_write(ehi, elo, i);
 		splx(spl);
 		return 0;
 	}
 
-	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+	ehi = faultaddress;
+	elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+	if (READONLY) elo &= ~TLBLO_DIRTY;
+	tlb_random(ehi, elo);
 	splx(spl);
-	return EFAULT;
+	return 0;
 }
 
 struct addrspace *
@@ -220,6 +291,8 @@ as_create(void)
 	as->as_pbase2 = 0;
 	as->as_npages2 = 0;
 	as->as_stackpbase = 0;
+
+	as->LOADED = false;
 
 	return as;
 }

@@ -34,6 +34,7 @@
 #include <mips/trapframe.h>
 #include <cpu.h>
 #include <spl.h>
+#include <kern/errno.h>
 #include <thread.h>
 #include <current.h>
 #include <vm.h>
@@ -86,6 +87,7 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 		sig = SIGABRT;
 		break;
 	    case EX_MOD:
+			sys__exit(EPERM);
 	    case EX_TLBL:
 	    case EX_TLBS:
 		sig = SIGSEGV;
