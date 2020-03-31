@@ -210,7 +210,7 @@ int sys_execv(userptr_t prog, userptr_t argv) {
 
 
   // Switch to it and activate it.
-  struct addrspace *old_as = curproc_setas(as);
+  curproc_setas(as);
 	as_activate();
 
   // load executable
@@ -228,7 +228,7 @@ int sys_execv(userptr_t prog, userptr_t argv) {
   if (result) return result;
 
   // delete old address space
-  as_destroy(old_as);
+  // as_destroy(old_as);
 
   // push strings onto the stack
   userptr_t arg_locs[argc];

@@ -52,8 +52,9 @@
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 
 bool CORE_MAP_CREATED = false;
-int CORE_MAP_SIZE = 0;
+int frame_num = 0;
 int *CORE_MAP;
+paddr_t mem_start;
 
 void
 vm_bootstrap(void)
@@ -64,15 +65,18 @@ vm_bootstrap(void)
 	ram_getsize(&lo, &hi);
 
 	// check this
-	int space = (hi-lo);
-	int num_pages = space / (PAGE_SIZE + 4); // max number of pages is probably 128
-	CORE_MAP_SIZE = num_pages;
-	paddr_t map_start = ROUNDUP(num_pages * sizeof(int) + lo, PAGE_SIZE);
-	CORE_MAP = (int*) PADDR_TO_KVADDR(map_start);
+	int space = hi - lo;
+	int num_pages = space / (PAGE_SIZE + sizeof(int));
+	frame_num = num_pages;
+	paddr_t map_start = ROUNDUP(frame_num * sizeof(int) + lo, PAGE_SIZE);
+	mem_start = map_start;
+	CORE_MAP = (int*) PADDR_TO_KVADDR(lo);
+
+	kprintf("Frame count: %d\n", frame_num);
 
 	// set all values to 0
-	for (int i = 0; i < num_pages; i ++) {
-		*(int *)(CORE_MAP+i*sizeof(int))= 0;
+	for (int i = 0; i < frame_num; i ++) {
+		CORE_MAP[i] = 0;
 	}
 }
 
@@ -80,7 +84,6 @@ static
 paddr_t
 getppages(unsigned long npages)
 {
-	// kprintf("Looking for space for %d pages!\n", (int)npages);
 	paddr_t addr = -1;
 
 	if (!CORE_MAP_CREATED) {
@@ -91,33 +94,26 @@ getppages(unsigned long npages)
 		spinlock_release(&stealmem_lock);
 	} else {
 		spinlock_acquire(&stealmem_lock);
-		for (int i = 0; i < CORE_MAP_SIZE-(int)npages; i ++) {
-			int num_page = 0;
-			// find n free pages in a row
-			while (num_page < (int)npages) {
-				// spinlock_acquire(&stealmem_lock);
-				if (*(int*)(CORE_MAP+i*sizeof(int) + num_page*sizeof(int)) == 0) {
-					num_page ++;
-				} else {
-					break;
-				}
+		int num_pages = (int)npages;
+		for (int i = 0; i < frame_num - num_pages; i ++) {
+			int loc = 0;
+			while (loc < num_pages) {
+				if (CORE_MAP[i + loc] == 0) loc ++;
+				else break;
 				
 			}
 
-			if (num_page == (int)npages) {
-				// then allocate all those pages
+			if (loc == num_pages) {
 				int counter = 1;
-				// give pa the actual address of the page
-				addr = (paddr_t)ROUNDUP(((int)CORE_MAP+CORE_MAP_SIZE*sizeof(int) + i*PAGE_SIZE - MIPS_KSEG0), PAGE_SIZE);
-				// kprintf("PA: %x\n", addr);
-				while (counter <= (int)npages) {
-					int * mem = CORE_MAP+i*sizeof(int) + (counter-1)*sizeof(int);
-					*mem = counter;
+				addr = (paddr_t)ROUNDUP(mem_start + i*PAGE_SIZE, PAGE_SIZE);
+				while (counter <= num_pages) {
+					CORE_MAP[i + counter - 1] = counter;
 					counter ++;
 				}
 				break;
 			}
 		}
+		// print_coremap();
 		spinlock_release(&stealmem_lock);
 	}
 
@@ -143,12 +139,27 @@ alloc_kpages(int npages)
 void 
 free_kpages(vaddr_t addr)
 {
-	// find the page start by converting to paddr
-	int pageNum = ((int)(addr + MIPS_KSEG0) - (int)CORE_MAP)/ PAGE_SIZE;
-	(void)pageNum;
-	// kprintf("Page to delete: %d\n", pageNum);
-	// make everything 0 until it reaches the next 0 or the next 1
-	// (void)addr;
+	paddr_t pa = KVADDR_TO_PADDR(addr);
+	KASSERT(pa % PAGE_SIZE == 0);
+
+	for (int i = 0; i < frame_num; i ++) {
+		paddr_t myAddr = (paddr_t)ROUNDUP(mem_start + i*PAGE_SIZE, PAGE_SIZE);
+		if (myAddr == pa) {
+			// kprintf("Trying to free page %d\n", i);
+			if (CORE_MAP[i] == 0) {
+				kprintf("There was an error freeing unused space\n");
+				break;
+			}
+
+			int j = i;
+			while (CORE_MAP[j] > 0) {
+				// kprintf("Freeing page %d\n", j);
+				CORE_MAP[j] = 0;
+				j ++;
+			}
+			break;
+		}
+	}
 
 }
 
@@ -463,4 +474,10 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	
 	*ret = new;
 	return 0;
+}
+
+void print_coremap() {
+	for (int i = 0; i < 900; i ++) {
+		kprintf("Frame %d,      address %x,       page %d\n",i, mem_start + i * PAGE_SIZE, CORE_MAP[i]);
+	}
 }
