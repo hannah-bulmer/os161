@@ -50,24 +50,84 @@
  * Wrap rma_stealmem in a spinlock.
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
+bool CORE_MAP_CREATED = false;
+int frame_num = 0;
+int *CORE_MAP;
+paddr_t mem_start;
+
 
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+	spinlock_acquire(&stealmem_lock);
+
+	paddr_t lo; paddr_t hi;
+	ram_getsize(&lo, &hi);
+
+	// check this
+	int space = hi - lo;
+	int num_pages = space / PAGE_SIZE;
+	int core_map_size = num_pages * sizeof(int);
+	frame_num = num_pages;
+	int num_map_pages = ROUNDUP(core_map_size, PAGE_SIZE) / PAGE_SIZE;
+	frame_num -= num_map_pages;
+	// paddr_t map_start = ROUNDUP(frame_num * sizeof(int) + lo, PAGE_SIZE);
+	mem_start = lo;
+	CORE_MAP = (int*) PADDR_TO_KVADDR(lo);
+
+	kprintf("Frame count: %d\n", frame_num);
+
+	// set all values to 0
+	for (int i = 0; i < frame_num; i ++) {
+		CORE_MAP[i] = 0;
+	}
+
+	CORE_MAP_CREATED = true;
+	spinlock_release(&stealmem_lock);
 }
 
 static
 paddr_t
 getppages(unsigned long npages)
 {
-	paddr_t addr;
+	paddr_t addr = -1;
 
-	spinlock_acquire(&stealmem_lock);
+	if (!CORE_MAP_CREATED) {
+		spinlock_acquire(&stealmem_lock);
 
-	addr = ram_stealmem(npages);
-	
-	spinlock_release(&stealmem_lock);
+		addr = ram_stealmem(npages);
+		
+		spinlock_release(&stealmem_lock);
+	} else {
+		spinlock_acquire(&stealmem_lock);
+		bool aval = true;
+		int i = 0;
+		int pages = (int)npages;
+		for (i = 0; i < frame_num; i ++) {
+			if (CORE_MAP[i] == 0) {
+				for (int j = 0; j < pages; j ++) {
+					if (i + j < frame_num) {
+						if (CORE_MAP[i + 1] != 0) aval = false;
+						else {
+							aval = true;
+							break;
+						}
+					}
+				}
+				if (aval == true) break;
+			}
+		}
+
+		if (aval == true && CORE_MAP[i] == 0) {
+			for (int j = 0; j < pages; j ++) {
+				CORE_MAP[i + j] = pages;
+				pages --;
+			}
+		}
+		spinlock_release(&stealmem_lock);
+		return mem_start + i*PAGE_SIZE;
+	}
+
 	return addr;
 }
 
@@ -86,9 +146,23 @@ alloc_kpages(int npages)
 void 
 free_kpages(vaddr_t addr)
 {
-	/* nothing - leak the memory. */
+	if (!CORE_MAP_CREATED) return;
+	spinlock_acquire(&stealmem_lock);
 
-	(void)addr;
+	paddr_t pa = KVADDR_TO_PADDR(addr);
+	KASSERT(pa % PAGE_SIZE == 0);
+
+	int index = (pa - mem_start) / PAGE_SIZE;
+	if (index <= frame_num) {
+		int npages = CORE_MAP[index];
+		for (int j = 0; j < npages; j ++) {
+			if (index + j > frame_num) break;
+			else {
+				CORE_MAP[index + j] = 0;
+			}
+		}
+	}
+	spinlock_release(&stealmem_lock);
 }
 
 void
